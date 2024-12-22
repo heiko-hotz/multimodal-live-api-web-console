@@ -22,25 +22,42 @@ import { Altair } from "./components/altair/Altair";
 import ControlTray from "./components/control-tray/ControlTray";
 import cn from "classnames";
 
-const API_KEY = process.env.REACT_APP_GEMINI_API_KEY as string;
-if (typeof API_KEY !== "string") {
-  throw new Error("set REACT_APP_GEMINI_API_KEY in .env");
-}
-
-const host = "generativelanguage.googleapis.com";
-const uri = `wss://${host}/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent`;
+const PROXY_URL = process.env.REACT_APP_PROXY_URL || "ws://localhost:8080";
 
 function App() {
-  // this video reference is used for displaying the active stream, whether that is the webcam or screen capture
-  // feel free to style as you see fit
   const videoRef = useRef<HTMLVideoElement>(null);
-  // either the screen capture, the video or null, if null we hide it
   const [videoStream, setVideoStream] = useState<MediaStream | null>(null);
+  const [bearerToken, setBearerToken] = useState("");
+  const [projectId, setProjectId] = useState("");
 
   return (
     <div className="App">
-      <LiveAPIProvider url={uri} apiKey={API_KEY}>
+      <LiveAPIProvider 
+        url={PROXY_URL} 
+        bearerToken={bearerToken}
+        projectId={projectId}
+      >
         <div className="streaming-console">
+          <div className="form-container">
+            <div className="form-row">
+              <label>Project ID:</label>
+              <input 
+                type="text" 
+                value={projectId} 
+                onChange={(e) => setProjectId(e.target.value)}
+                placeholder="your-project-id"
+              />
+            </div>
+            <div className="form-row">
+              <label>Bearer Token:</label>
+              <input 
+                type="password" 
+                value={bearerToken} 
+                onChange={(e) => setBearerToken(e.target.value)}
+                placeholder="Bearer token from gcloud auth print-access-token"
+              />
+            </div>
+          </div>
           <SidePanel />
           <main>
             <div className="main-app-area">

@@ -47,7 +47,7 @@ interface MultimodalLiveClientEventTypes {
   log: (log: StreamingLog) => void;
   close: (event: CloseEvent) => void;
   audio: (data: ArrayBuffer) => void;
-  content: (data: ServerContent) => void;
+  content: (content: ModelTurn) => void;
   interrupted: () => void;
   setupcomplete: () => void;
   turncomplete: () => void;
@@ -57,7 +57,6 @@ interface MultimodalLiveClientEventTypes {
 
 export type MultimodalLiveAPIClientConnection = {
   url?: string;
-  apiKey: string;
 };
 
 /**
@@ -73,13 +72,9 @@ export class MultimodalLiveClient extends EventEmitter<MultimodalLiveClientEvent
     return { ...this.config };
   }
 
-  constructor({ url, apiKey }: MultimodalLiveAPIClientConnection) {
+  constructor({ url }: MultimodalLiveAPIClientConnection) {
     super();
-    url =
-      url ||
-      `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent`;
-    url += `?key=${apiKey}`;
-    this.url = url;
+    this.url = url || 'ws://localhost:8080';
     this.send = this.send.bind(this);
   }
 
@@ -95,62 +90,85 @@ export class MultimodalLiveClient extends EventEmitter<MultimodalLiveClientEvent
   connect(config: LiveConfig): Promise<boolean> {
     this.config = config;
 
-    const ws = new WebSocket(this.url);
-
-    ws.addEventListener("message", async (evt: MessageEvent) => {
-      if (evt.data instanceof Blob) {
-        this.receive(evt.data);
-      } else {
-        console.log("non blob message", evt);
-      }
-    });
     return new Promise((resolve, reject) => {
-      const onError = (ev: Event) => {
-        this.disconnect(ws);
-        const message = `Could not connect to "${this.url}"`;
-        this.log(`server.${ev.type}`, message);
-        reject(new Error(message));
-      };
-      ws.addEventListener("error", onError);
-      ws.addEventListener("open", (ev: Event) => {
-        if (!this.config) {
-          reject("Invalid config sent to `connect(config)`");
-          return;
-        }
-        this.log(`client.${ev.type}`, `connected to socket`);
-        this.emit("open");
-
-        this.ws = ws;
-
-        const setupMessage: SetupMessage = {
-          setup: this.config,
-        };
-        this._sendDirect(setupMessage);
-        this.log("client.send", "setup");
-
-        ws.removeEventListener("error", onError);
-        ws.addEventListener("close", (ev: CloseEvent) => {
-          console.log(ev);
-          this.disconnect(ws);
-          let reason = ev.reason || "";
-          if (reason.toLowerCase().includes("error")) {
-            const prelude = "ERROR]";
-            const preludeIndex = reason.indexOf(prelude);
-            if (preludeIndex > 0) {
-              reason = reason.slice(
-                preludeIndex + prelude.length + 1,
-                Infinity,
-              );
+      try {
+        const ws = new WebSocket(this.url);
+        
+        ws.addEventListener("message", async (evt: MessageEvent) => {
+          try {
+            let data;
+            if (evt.data instanceof Blob) {
+              data = await blobToJSON(evt.data);
+            } else {
+              data = JSON.parse(evt.data);
             }
+            
+            // Handle setupComplete
+            if (isSetupCompleteMessage(data)) {
+              console.log("Setup complete received");
+              this.emit("setupcomplete");
+              return;
+            }
+
+            // Handle server content
+            if (isServerContenteMessage(data)) {
+              const { serverContent } = data;
+              console.log("Received server content:", serverContent);
+              
+              if (isModelTurn(serverContent)) {
+                const { parts } = serverContent.modelTurn;
+                console.log("Model turn parts:", parts);
+                
+                // Handle text parts first
+                const textParts = parts.filter(part => part.text);
+                if (textParts.length > 0) {
+                  console.log("Emitting text content");
+                  this.emit("content", { modelTurn: { parts: textParts } });
+                }
+
+                // Handle audio parts
+                const audioParts = parts.filter(
+                  part => part.inlineData?.mimeType?.startsWith("audio/")
+                );
+                for (const part of audioParts) {
+                  if (part.inlineData?.data) {
+                    console.log("Emitting audio data");
+                    const audioData = base64ToArrayBuffer(part.inlineData.data);
+                    this.emit("audio", audioData);
+                  }
+                }
+              }
+            }
+          } catch (error) {
+            console.error("Error processing message:", error);
+            console.error("Message was:", evt.data);
           }
-          this.log(
-            `server.${ev.type}`,
-            `disconnected ${reason ? `with reason: ${reason}` : ``}`,
-          );
-          this.emit("close", ev);
         });
-        resolve(true);
-      });
+
+        ws.addEventListener("error", (ev: Event) => {
+          this.disconnect(ws);
+          const message = `Could not connect to "${this.url}"`;
+          this.log(`server.${ev.type}`, message);
+          reject(new Error(message));
+        });
+
+        ws.addEventListener("open", (ev: Event) => {
+          this.log(`client.${ev.type}`, `connected to socket`);
+          this.ws = ws; // Set ws before emitting open
+          this.emit("open");
+
+          ws.addEventListener("close", (ev: CloseEvent) => {
+            this.disconnect(ws);
+            this.log(`server.${ev.type}`, `disconnected ${ev.reason ? `with reason: ${ev.reason}` : ''}`);
+            this.emit("close", ev);
+          });
+
+          resolve(true);
+        });
+
+      } catch (error) {
+        reject(error);
+      }
     });
   }
 
@@ -164,77 +182,6 @@ export class MultimodalLiveClient extends EventEmitter<MultimodalLiveClientEvent
       return true;
     }
     return false;
-  }
-
-  protected async receive(blob: Blob) {
-    const response: LiveIncomingMessage = (await blobToJSON(
-      blob,
-    )) as LiveIncomingMessage;
-    if (isToolCallMessage(response)) {
-      this.log("server.toolCall", response);
-      this.emit("toolcall", response.toolCall);
-      return;
-    }
-    if (isToolCallCancellationMessage(response)) {
-      this.log("receive.toolCallCancellation", response);
-      this.emit("toolcallcancellation", response.toolCallCancellation);
-      return;
-    }
-
-    if (isSetupCompleteMessage(response)) {
-      this.log("server.send", "setupComplete");
-      this.emit("setupcomplete");
-      return;
-    }
-
-    // this json also might be `contentUpdate { interrupted: true }`
-    // or contentUpdate { end_of_turn: true }
-    if (isServerContenteMessage(response)) {
-      const { serverContent } = response;
-      if (isInterrupted(serverContent)) {
-        this.log("receive.serverContent", "interrupted");
-        this.emit("interrupted");
-        return;
-      }
-      if (isTurnComplete(serverContent)) {
-        this.log("server.send", "turnComplete");
-        this.emit("turncomplete");
-        //plausible theres more to the message, continue
-      }
-
-      if (isModelTurn(serverContent)) {
-        let parts: Part[] = serverContent.modelTurn.parts;
-
-        // when its audio that is returned for modelTurn
-        const audioParts = parts.filter(
-          (p) => p.inlineData && p.inlineData.mimeType.startsWith("audio/pcm"),
-        );
-        const base64s = audioParts.map((p) => p.inlineData?.data);
-
-        // strip the audio parts out of the modelTurn
-        const otherParts = difference(parts, audioParts);
-        // console.log("otherParts", otherParts);
-
-        base64s.forEach((b64) => {
-          if (b64) {
-            const data = base64ToArrayBuffer(b64);
-            this.emit("audio", data);
-            this.log(`server.audio`, `buffer (${data.byteLength})`);
-          }
-        });
-        if (!otherParts.length) {
-          return;
-        }
-
-        parts = otherParts;
-
-        const content: ModelTurn = { modelTurn: { parts } };
-        this.emit("content", content);
-        this.log(`server.content`, response);
-      }
-    } else {
-      console.log("received unmatched message", response);
-    }
   }
 
   /**

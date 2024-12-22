@@ -22,15 +22,17 @@ const LiveAPIContext = createContext<UseLiveAPIResults | undefined>(undefined);
 export type LiveAPIProviderProps = {
   children: ReactNode;
   url?: string;
-  apiKey: string;
+  bearerToken?: string;
+  projectId?: string;
 };
 
 export const LiveAPIProvider: FC<LiveAPIProviderProps> = ({
-  url,
-  apiKey,
   children,
+  url,
+  bearerToken,
+  projectId,
 }) => {
-  const liveAPI = useLiveAPI({ url, apiKey });
+  const liveAPI = useLiveAPI({ url, bearerToken, projectId });
 
   return (
     <LiveAPIContext.Provider value={liveAPI}>
