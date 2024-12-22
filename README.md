@@ -8,10 +8,10 @@ Watch the demo of the Multimodal Live API [here](https://www.youtube.com/watch?v
 
 ## Usage
 
-To get started, [create a free Gemini API key](https://aistudio.google.com/apikey) and add it to the `.env` file. Then:
+To get started:
 
-```
-$ npm install && npm start
+```bash
+npm install && npm start
 ```
 
 We have provided several example applications on other branches of this repository:
